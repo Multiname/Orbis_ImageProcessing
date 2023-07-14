@@ -1,0 +1,8 @@
+env
+**/__pycache__
+instance
+migrations
+server_files
+.gitattributes
+.gitignore
+.git

@@ -1,0 +1,4 @@
+env
+image_processing
+**/__pycache__
+.git

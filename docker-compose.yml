@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  postgres:
+    env_file:
+      - postgresql.env
+    restart: always
+    image: postgres:14.4
+    volumes:
+      - ./postgres-data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+     - app
+
+  rabbitmq-server:
+    image: "rabbitmq:3.6-management-alpine"
+    hostname: "rabbitmq-host"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "admin"
+      RABBITMQ_DEFAULT_PASS: "pass"
+    networks:
+      - rabbitnetwork
+    volumes:
+        - ~/.docker-conf/rabbitmq/data/:/var/lib/rabbitmq/
+        - ~/.docker-conf/rabbitmq/log/:/var/log/rabbitmq
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "5672" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  simple-file-server:
+    build: ./server
+    ports:
+      - 5001:5001
+    volumes:
+      - ./simple-file-server:/app
+      - ./simple-file-server/storage:/var/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: uwsgi --ini wsgi.ini
+    networks:
+      - app
+    healthcheck:
+      test: curl --fail http://simple-file-server:5001/api/file-server/ || exit 1
+      interval: 10s
+      timeout: 2s
+      retries: 5
+
+  image-processing-api:
+    build: ./image_processor
+    ports:
+      - 5002:5002
+    volumes:
+      - ./image_processor/src:/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq-server:
+        condition: service_healthy
+    command: uwsgi --ini wsgi.ini
+    networks:
+      - rabbitnetwork
+      - app
+    healthcheck:
+      test: curl --fail http://image-processing-api:5002/api/image-processing/ || exit 1
+      interval: 10s
+      timeout: 2s
+      retries: 5
+
+  worker:
+    build: ./image_processor
+    volumes:
+      - ./image_processor/src:/src
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq-server:
+        condition: service_healthy
+    command: bash -c "cd scripts && python worker.py"
+    networks:
+      - rabbitnetwork
+      - app
+    deploy:
+      mode: replicated
+      replicas: 2
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - 80:80
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    networks:
+      - app
+    depends_on:
+      image-processing-api:
+        condition: service_healthy
+      simple-file-server:
+        condition: service_healthy
+
+
+networks:
+  app:
+    driver: bridge
+  rabbitnetwork:
+    driver: bridge
